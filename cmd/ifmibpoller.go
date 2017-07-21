@@ -111,9 +111,9 @@ func main() {
 		err = entry.DoPoll(conn, now, pathfmt)
 
 		if err == nil {
-			fmt.Printf("%s: Captured sample #%d in %.3fs\n", entry.Timestamp, i, entry.Duration)
+			fmt.Printf("%s %s: Captured sample #%d in %.3fs\n", entry.Timestamp, entry.Name, i, entry.Duration)
 		} else {
-			fmt.Printf("%s: Error while polling agent, missed #%d, took %.3fs: %v\n", entry.Timestamp, i, entry.Duration, err)
+			fmt.Printf("%s %s: Error while polling agent, missed #%d, took %.3fs: %v\n", entry.Timestamp, entry.Name, i, entry.Duration, err)
 			i--
 		}
 
