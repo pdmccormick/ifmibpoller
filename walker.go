@@ -27,19 +27,21 @@ const (
 	OID_ifHCOutBroadcastPkts = 13
 )
 
-type IfMibWalk map[int][]WalkEntry
+type kind = int
 
 const (
-	WALK_INT int = iota
-	WALK_STRING
+	Kind_Int kind = iota
+	Kind_String
 )
 
-type WalkEntry struct {
-	index  uint64
-	kind   int
-	ivalue uint64
-	svalue string
+type walkEntry struct {
+	index uint64
+	kind  kind
+	num   uint64
+	str   string
 }
+
+type IfMibWalk map[int][]walkEntry
 
 type IfMibWalkOutput struct {
 	Index []uint64 `json:"index"`
@@ -59,24 +61,20 @@ type IfMibWalkOutput struct {
 	IfHCOutBroadcastPkts []uint64 `json:"out_bpkts"`
 }
 
-var subsOfInterest map[int]bool
+var interested = map[int]bool{
+	1:  true,
+	15: true,
+	17: true,
+	18: true,
 
-func init() {
-	subsOfInterest = map[int]bool{
-		1:  true,
-		15: true,
-		17: true,
-		18: true,
-
-		6:  true,
-		7:  true,
-		8:  true,
-		9:  true,
-		10: true,
-		11: true,
-		12: true,
-		13: true,
-	}
+	6:  true,
+	7:  true,
+	8:  true,
+	9:  true,
+	10: true,
+	11: true,
+	12: true,
+	13: true,
 }
 
 func WalkAgent(snmp *gosnmp.GoSNMP) (*IfMibWalkOutput, error) {
@@ -85,7 +83,7 @@ func WalkAgent(snmp *gosnmp.GoSNMP) (*IfMibWalkOutput, error) {
 		return nil, err
 	}
 
-	w := make(IfMibWalk)
+	w := &IfMibWalk{}
 	w.FromResults(results)
 	o := w.MakeOutput()
 
@@ -118,6 +116,7 @@ func (w IfMibWalk) MakeOutput() (o IfMibWalkOutput) {
 	for i, enum_value := range present {
 		b := false
 
+		// FIXME clarify the enum types
 		if enum_value == 1 {
 			b = true
 		} else if enum_value == 2 {
@@ -136,8 +135,10 @@ func (w IfMibWalk) ExtractStrings(sub int) (xs []string) {
 		return nil
 	}
 
-	for _, entry := range entries {
-		xs = append(xs, entry.svalue)
+	xs = make([]string, len(entries))
+
+	for i, entry := range entries {
+		xs[i] = entry.str
 	}
 
 	return xs
@@ -149,8 +150,10 @@ func (w IfMibWalk) ExtractUint64s(sub int) (xs []uint64) {
 		return nil
 	}
 
-	for _, entry := range entries {
-		xs = append(xs, entry.ivalue)
+	xs = make([]uint64, len(entries))
+
+	for i, entry := range entries {
+		xs[i] = entry.num
 	}
 
 	return xs
@@ -166,29 +169,31 @@ func (w IfMibWalk) FromResults(results []gosnmp.SnmpPDU) {
 			continue
 		}
 
+		// FIXME handle error
+
 		sub, _ := strconv.Atoi(s[0])
 		idx_, _ := strconv.Atoi(s[1])
 		idx := uint64(idx_)
 
-		_, ok := subsOfInterest[sub]
+		_, ok := interested[sub]
 		if !ok {
 			continue
 		}
 
-		entry := WalkEntry{
+		entry := walkEntry{
 			index: idx,
 		}
 
 		switch pdu.Type {
 		case gosnmp.OctetString:
 			b := pdu.Value.([]byte)
-			entry.kind = WALK_STRING
-			entry.svalue = string(b)
+			entry.kind = Kind_String
+			entry.str = string(b)
 
 		default:
 			val := gosnmp.ToBigInt(pdu.Value).Uint64()
-			entry.kind = WALK_INT
-			entry.ivalue = val
+			entry.kind = Kind_Int
+			entry.num = val
 		}
 
 		w[sub] = append(w[sub], entry)
