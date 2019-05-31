@@ -1,6 +1,9 @@
-.PHONY: all
+.PHONY: all clean
 
-all: ifmibpoller
+all: bin/ifmibpoller
 
-ifmibpoller: *.go cmd/ifmibpoller.go
-	go build cmd/ifmibpoller.go
+bin/ifmibpoller: *.go cmd/ifmibpoller.go
+	go build -o $@ cmd/ifmibpoller.go
+
+clean:
+	rm -rf bin/
