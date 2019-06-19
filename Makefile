@@ -1,9 +1,26 @@
-.PHONY: all clean
+MAINS   := $(wildcard cmd/*/main.go)
+CMDS    := $(patsubst cmd/%/main.go,%,$(MAINS))
+BINS    = $(foreach cmd,$(CMDS),bin/$(cmd))
 
-all: bin/ifmibpoller
+.PHONY: all build test clean
 
-bin/ifmibpoller: *.go cmd/ifmibpoller.go
-	go build -o $@ cmd/ifmibpoller.go
+all: build
+
+build: bin $(BINS)
+
+bin:
+	@mkdir -p bin/
+
+bin/%: cmd/%/*.go
+	@echo "    BUILD $@"
+	@go build -o $@ ./cmd/$*
+
+test:
+	@echo "    TEST"
+	@go test calcula/...
 
 clean:
-	rm -rf bin/
+	@echo "    CLEAN"
+	@rm -rf bin/
+
+print-%: ; @echo $*=$($*)

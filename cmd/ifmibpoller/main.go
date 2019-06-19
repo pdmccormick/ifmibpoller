@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"ifmibpoller"
+	"calcula"
 )
 
 type PollEntry struct {
-	Name      string                       `json:"name"`
-	Agent     string                       `json:"agent"`
-	Timestamp string                       `json:"timestamp"`
-	Duration  float64                      `json:"duration"`
-	Table     *ifmibpoller.IfMibWalkOutput `json:"table"`
+	Name      string                   `json:"name"`
+	Agent     string                   `json:"agent"`
+	Timestamp string                   `json:"timestamp"`
+	Duration  float64                  `json:"duration"`
+	Table     *calcula.IfMibWalkOutput `json:"table"`
 }
 
 func main() {
@@ -142,7 +142,7 @@ func (entry *PollEntry) DoPoll(conn *gosnmp.GoSNMP, now func() time.Time, pathfm
 	var err error
 
 	start := now()
-	entry.Table, err = ifmibpoller.WalkAgent(conn)
+	entry.Table, err = calcula.WalkAgent(conn)
 	stop := now()
 
 	entry.Timestamp = start.Format(time.RFC3339Nano)

@@ -1,4 +1,4 @@
-package ifmibpoller
+package calcula
 
 import (
 	"strconv"
@@ -7,7 +7,7 @@ import (
 	"github.com/soniah/gosnmp"
 )
 
-const OID_ifMIB_ifXEntry = ".1.3.6.1.2.1.31.1.1.1."
+const OID_ifMIB_ifXEntry = ".1.3.6.1.2.1.31.1.1.1"
 
 const (
 	// State
@@ -165,9 +165,11 @@ func (w IfMibWalk) FromResults(results []gosnmp.SnmpPDU) {
 
 		s := strings.Split(name, ".")
 
-		if len(s) != 2 {
+		if len(s) != 3 {
 			continue
 		}
+
+		s = s[1:]
 
 		// FIXME handle error
 
