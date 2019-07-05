@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/soniah/gosnmp"
 )
@@ -33,6 +34,9 @@ const (
 )
 
 type IfStats struct {
+	Timestamp time.Time     `json:"-"`
+	Duration  time.Duration `json:"-"`
+
 	Index   []uint64 `json:"index"`
 	Name    []string `json:"name"`
 	Alias   []string `json:"alias"`
@@ -51,6 +55,8 @@ type IfStats struct {
 
 func (st *IfStats) Walk(snmp *gosnmp.GoSNMP) error {
 	var err error
+
+	st.Timestamp = time.Now()
 
 	err = st.walkName(snmp)
 	if err != nil {
@@ -111,6 +117,8 @@ func (st *IfStats) Walk(snmp *gosnmp.GoSNMP) error {
 	if err != nil {
 		return err
 	}
+
+	st.Duration = time.Since(st.Timestamp)
 
 	return nil
 }

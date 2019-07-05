@@ -142,13 +142,13 @@ func (entry *PollEntry) DoPoll(conn *gosnmp.GoSNMP, now func() time.Time, pathfm
 	var err error
 
 	table := &calcula.IfStats{}
-	start := now()
 	err = table.Walk(conn)
-	stop := now()
+
+	start := table.Timestamp
 
 	entry.Table = table
 	entry.Timestamp = start.Format(time.RFC3339Nano)
-	entry.Duration = stop.Sub(start).Seconds()
+	entry.Duration = table.Duration.Seconds()
 
 	if err != nil {
 		return err
