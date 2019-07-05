@@ -41,7 +41,7 @@ type IfStats struct {
 	Linkspeed        []uint64 `json:"linkspeed"`
 	InOctets         []uint64 `json:"in_bytes"`
 	InUcastPkts      []uint64 `json:"in_upkts"`
-	InMulticastPkts  []uint64 `json:"in_umpkts"`
+	InMulticastPkts  []uint64 `json:"in_mpkts"`
 	InBroadcastPkts  []uint64 `json:"in_bpkts"`
 	OutOctets        []uint64 `json:"out_bytes"`
 	OutUcastPkts     []uint64 `json:"out_upkts"`
