@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/soniah/gosnmp"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,30 +66,25 @@ func main() {
 
 	var rp int
 	rp, err = strconv.Atoi(refresh_period_str)
-	//refresh_period_f, err = strconv.ParseFloat(refresh_period_str, 64)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("Agent: %s:%d\n", target, port)
-	fmt.Printf("Refresh period: %vs\n", rp)
+	log.Printf("Agent: %s:%d\n", target, port)
+	log.Printf("Refresh period: %vs\n", rp)
 
-	conn := &gosnmp.GoSNMP{
-		Version:   gosnmp.Version2c,
+	agent := calcula.MakeAgent(name)
+	agent.Start()
+
+	samples := make(chan *calcula.IfStats)
+	agent.RegisterListener(samples)
+
+	agent.Configure(&calcula.AgentConfig{
 		Target:    target,
-		Port:      uint16(port), // 1161,
+		Port:      port,
 		Community: community,
-		Timeout:   time.Duration(10 * time.Second),
-		Retries:   3,
-		MaxOids:   gosnmp.MaxOids,
-	}
-
-	err = conn.Connect()
-	if err != nil {
-		fmt.Printf("Connect error: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Conn.Close()
+		Refresh:   time.Duration(rp) * time.Second,
+	})
 
 	entry := &PollEntry{
 		Name:  name,
@@ -100,49 +95,34 @@ func main() {
 		entry.Agent = fmt.Sprintf("%s:%d", entry.Agent, port)
 	}
 
-	now := time.Now
-
-	//refresh_period := refresh_period_f * time.Second
-	refresh_period := time.Duration(rp) * time.Second
-	wakeup := now().Add(refresh_period)
-
-	loop := true
 	for i := 1; ; i++ {
-		err = entry.DoPoll(conn, now, pathfmt)
-
-		if err == nil {
-			fmt.Printf("%s %s: Captured sample #%d in %.3fs\n", entry.Timestamp, entry.Name, i, entry.Duration)
-		} else {
-			fmt.Printf("%s %s: Error while polling agent, missed #%d, took %.3fs: %v\n", entry.Timestamp, entry.Name, i, entry.Duration, err)
-			i--
-		}
-
-		if !loop {
+		table, ok := <-samples
+		if !ok {
 			break
 		}
 
-		next_refresh_period := refresh_period
-		for {
-			until := wakeup.Sub(now())
-			wakeup = wakeup.Add(next_refresh_period)
+		err := entry.Save(table, pathfmt)
+		if err == nil {
+			log.Printf("%s: Captured sample #%d in %.3fs", entry.Name, i, entry.Duration)
+		} else {
+			log.Printf("%s: Error while polling agent, missed #%d, took %.3fs: %v", entry.Name, i, entry.Duration, err)
+			i--
+		}
+	}
 
-			if until < 0 {
-				next_refresh_period *= 2
-				fmt.Printf("Increasing refresh_period to %.3f\n", next_refresh_period.Seconds())
-				continue
-			}
+	agent.Stop()
+	agent.UnregisterListener(samples)
 
-			time.Sleep(until)
+	for {
+		_, ok := <-samples
+		if !ok {
 			break
 		}
 	}
 }
 
-func (entry *PollEntry) DoPoll(conn *gosnmp.GoSNMP, now func() time.Time, pathfmt string) error {
+func (entry *PollEntry) Save(table *calcula.IfStats, pathfmt string) error {
 	var err error
-
-	table := &calcula.IfStats{}
-	err = table.Walk(conn)
 
 	start := table.Timestamp
 

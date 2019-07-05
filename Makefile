@@ -11,9 +11,9 @@ build: bin $(BINS)
 bin:
 	@mkdir -p bin/
 
-bin/%: cmd/%/*.go
+bin/%: cmd/%/*.go *.go
 	@echo "    BUILD $@"
-	@go build -o $@ ./cmd/$*
+	@go build -o $@ ./$(shell dirname $<)
 
 test:
 	@echo "    TEST"
