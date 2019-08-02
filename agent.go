@@ -8,9 +8,12 @@ import (
 	"github.com/soniah/gosnmp"
 )
 
+const (
+	DefaultSNMPPort = 161
+)
+
 type AgentConfig struct {
-	Target    string
-	Port      int
+	Address   string
 	Community string
 	Refresh   time.Duration
 }
@@ -135,12 +138,9 @@ func (a *Agent) loop() {
 			log.Printf("%s: configuring %+v", a.name, req.config)
 
 			tmp := defaultSnmp
-			tmp.Target = req.config.Target
+			tmp.Target = req.config.Address
 			tmp.Community = req.config.Community
-
-			if req.config.Port > 0 {
-				tmp.Port = uint16(req.config.Port)
-			}
+			tmp.Port = DefaultSNMPPort
 
 			sampleTick = time.NewTicker(req.config.Refresh)
 			sampleC = sampleTick.C

@@ -7,19 +7,170 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"calcula"
+
+	"gopkg.in/ini.v1"
+)
+
+const (
+	DefaultPathFmt                = "data/%N/%Y/%Y-%m/%Y%m%d_%H0000.jsonl"
+	DefaultSNMPCommunity          = "public"
+	DefaultAgentRefresh           = 10 * time.Second
+	DefaultPostAgentStartCooldown = 1 * time.Second
 )
 
 type PollEntry struct {
 	Name      string           `json:"name"`
-	Agent     string           `json:"agent"`
+	Address   string           `json:"address"`
 	Timestamp string           `json:"timestamp"`
 	Duration  float64          `json:"duration"`
 	Table     *calcula.IfStats `json:"table"`
+}
+
+type PoolConfig struct {
+	pathfmt string
+	configs map[string]*calcula.AgentConfig
+}
+
+func (pc *PoolConfig) FromIni(cfg *ini.File) bool {
+	pc.configs = make(map[string]*calcula.AgentConfig)
+
+	section, err := cfg.GetSection("agents")
+	if err != nil {
+		return false
+	}
+
+	if section.HasKey("pathfmt") {
+		pc.pathfmt = section.Key("pathfmt").MustString("")
+	}
+
+	var (
+		defaultCommunity = DefaultSNMPCommunity
+		defaultRefresh   = DefaultAgentRefresh
+	)
+
+	if section.HasKey("refresh") {
+		dur, err := section.Key("refresh").Duration()
+		if err == nil {
+			defaultRefresh = dur
+		}
+	}
+
+	if section.HasKey("community") {
+		defaultCommunity = section.Key("community").MustString(defaultCommunity)
+	}
+
+	for _, subsec := range section.ChildSections() {
+		nameKey := subsec.Key("name")
+		if nameKey == nil || nameKey.MustString("") == "" {
+			log.Printf("section %s missing or empty `name` key, ignoring", subsec.Name())
+			continue
+		}
+
+		name := nameKey.MustString("")
+
+		config := &calcula.AgentConfig{
+			Community: defaultCommunity,
+			Refresh:   defaultRefresh,
+		}
+
+		pc.configs[name] = config
+
+		if subsec.HasKey("address") {
+			config.Address = subsec.Key("address").MustString("")
+		}
+
+		if subsec.HasKey("community") {
+			config.Community = subsec.Key("community").MustString("")
+		}
+
+		if subsec.HasKey("refresh") {
+			dur, err := subsec.Key("refresh").Duration()
+			if err == nil {
+				config.Refresh = dur
+			}
+		}
+	}
+
+	return true
+}
+
+type AgentPool struct {
+	pathfmt string
+	agents  map[string]*calcula.Agent
+}
+
+func NewAgentPool() *AgentPool {
+	pool := &AgentPool{
+		agents: make(map[string]*calcula.Agent),
+	}
+
+	return pool
+}
+
+func (pool *AgentPool) ApplyConfig(cfg *PoolConfig) {
+	pool.pathfmt = cfg.pathfmt
+	if pool.pathfmt == "" {
+		pool.pathfmt = DefaultPathFmt
+	}
+
+	for name, config := range cfg.configs {
+		agent, found := pool.agents[name]
+		if !found {
+			agent = calcula.MakeAgent(name)
+			agent.Start()
+			pool.agents[name] = agent
+
+			samples := make(chan *calcula.IfStats)
+			agent.RegisterListener(samples)
+
+			go pool.runSampler(name, config.Address, samples)
+
+			time.Sleep(DefaultPostAgentStartCooldown)
+		}
+
+		agent.Configure(config)
+	}
+}
+
+func (pool *AgentPool) interpolatePath(name string, ts time.Time) string {
+	path := pool.pathfmt
+
+	path = strings.ReplaceAll(path, "%Y", fmt.Sprintf("%04d", ts.Year()))
+	path = strings.ReplaceAll(path, "%m", fmt.Sprintf("%02d", ts.Month()))
+	path = strings.ReplaceAll(path, "%d", fmt.Sprintf("%02d", ts.Day()))
+	path = strings.ReplaceAll(path, "%H", fmt.Sprintf("%02d", ts.Hour()))
+	path = strings.ReplaceAll(path, "%N", name)
+
+	return path
+}
+
+func (pool *AgentPool) runSampler(name, address string, samples chan *calcula.IfStats) {
+	entry := &PollEntry{
+		Name:    name,
+		Address: address,
+	}
+
+	for i := 1; ; i++ {
+		table, ok := <-samples
+		if !ok {
+			break
+		}
+
+		filename := pool.interpolatePath(name, table.Timestamp)
+
+		err := entry.Save(table, filename)
+		if err != nil {
+			log.Printf("%s: error while polling agent, missed #%d, took %.3fs: %v", name, i, entry.Duration, err)
+			i--
+			continue
+		}
+
+		log.Printf("%s: captured sample #%d in %.3fs", name, i, entry.Duration)
+	}
 }
 
 func main() {
@@ -31,103 +182,41 @@ func main() {
 		flag.PrintDefaults()
 	}
 
-	var community string
-	flag.StringVar(&community, "community", "public", "the community string for agent")
-
-	var name string
-	flag.StringVar(&name, "name", "switch", "the name of the agent")
-
-	var host string
-	flag.StringVar(&host, "host", "localhost", "the address of the agent")
-
-	var pathfmt string
-	default_pathfmt := "data/%Y/%Y-%m/%Y%m%d_%H0000.jsonl"
-	flag.StringVar(&pathfmt, "pathfmt", default_pathfmt, "the format of output files. Example: data/%Y/%Y-%m/%Y%m%d_%H0000.jsonl")
-
-	var refresh_period_str string
-	default_refresh_period_str := "10"
-	flag.StringVar(&refresh_period_str, "refresh_period", default_refresh_period_str, "the refresh period of the poller")
+	iniFlag := flag.String("ini", "", "path to configuration file")
 
 	flag.Parse()
 
-	target := host
-	default_snmp_port := 161
-	port := default_snmp_port
-
-	hs := strings.SplitN(host, ":", 2)
-	if len(hs) > 1 {
-		target = hs[0]
-
-		port, err = strconv.Atoi(hs[1])
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	var rp int
-	rp, err = strconv.Atoi(refresh_period_str)
+	cfg, err := ini.Load(*iniFlag)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Fail to read file: %v", err)
 	}
 
-	log.Printf("Agent: %s:%d\n", target, port)
-	log.Printf("Refresh period: %vs\n", rp)
+	pc := &PoolConfig{}
+	pc.FromIni(cfg)
 
-	agent := calcula.MakeAgent(name)
-	agent.Start()
+	pool := NewAgentPool()
+	pool.ApplyConfig(pc)
 
-	samples := make(chan *calcula.IfStats)
-	agent.RegisterListener(samples)
+	<-make(chan bool)
 
-	agent.Configure(&calcula.AgentConfig{
-		Target:    target,
-		Port:      port,
-		Community: community,
-		Refresh:   time.Duration(rp) * time.Second,
-	})
+	/*
+		agent.Stop()
+		agent.UnregisterListener(samples)
 
-	entry := &PollEntry{
-		Name:  name,
-		Agent: target,
-	}
-
-	if port != default_snmp_port {
-		entry.Agent = fmt.Sprintf("%s:%d", entry.Agent, port)
-	}
-
-	for i := 1; ; i++ {
-		table, ok := <-samples
-		if !ok {
-			break
+		for {
+			_, ok := <-samples
+			if !ok {
+				break
+			}
 		}
-
-		err := entry.Save(table, pathfmt)
-		if err == nil {
-			log.Printf("%s: Captured sample #%d in %.3fs", entry.Name, i, entry.Duration)
-		} else {
-			log.Printf("%s: Error while polling agent, missed #%d, took %.3fs: %v", entry.Name, i, entry.Duration, err)
-			i--
-		}
-	}
-
-	agent.Stop()
-	agent.UnregisterListener(samples)
-
-	for {
-		_, ok := <-samples
-		if !ok {
-			break
-		}
-	}
+	*/
 }
 
-func (entry *PollEntry) Save(table *calcula.IfStats, pathfmt string) error {
+func (entry *PollEntry) Save(table *calcula.IfStats, filename string) error {
 	var err error
 
-	start := table.Timestamp
-
 	entry.Table = table
-	entry.Timestamp = start.Format(time.RFC3339Nano)
+	entry.Timestamp = table.Timestamp.Format(time.RFC3339Nano)
 	entry.Duration = table.Duration.Seconds()
 
 	if err != nil {
@@ -136,34 +225,28 @@ func (entry *PollEntry) Save(table *calcula.IfStats, pathfmt string) error {
 
 	data, err := json.Marshal(entry)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	path := strings.Replace(pathfmt, "%Y", fmt.Sprintf("%04d", start.Year()), -1)
-	path = strings.Replace(path, "%m", fmt.Sprintf("%02d", start.Month()), -1)
-	path = strings.Replace(path, "%d", fmt.Sprintf("%02d", start.Day()), -1)
-	path = strings.Replace(path, "%H", fmt.Sprintf("%02d", start.Hour()), -1)
-
-	dirpath := filepath.Dir(path)
-	err = os.MkdirAll(dirpath, 0775)
+	err = os.MkdirAll(filepath.Dir(filename), 0775)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0664)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0664)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer f.Close()
 
 	_, err = f.Write(data)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	_, err = f.WriteString("\n")
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	return nil
