@@ -5,14 +5,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/pdmccormick/ifmibpoller"
-
+	"go.pdmccormick.com/sse"
 	"gopkg.in/ini.v1"
+
+	"github.com/pdmccormick/ifmibpoller"
 )
 
 const (
@@ -101,11 +103,13 @@ func (pc *PoolConfig) FromIni(cfg *ini.File) bool {
 type AgentPool struct {
 	pathfmt string
 	agents  map[string]*ifmibpoller.Agent
+	samples chan *PollEntry
 }
 
 func NewAgentPool() *AgentPool {
 	pool := &AgentPool{
-		agents: make(map[string]*ifmibpoller.Agent),
+		agents:  make(map[string]*ifmibpoller.Agent),
+		samples: make(chan *PollEntry),
 	}
 
 	return pool
@@ -149,12 +153,12 @@ func (pool *AgentPool) interpolatePath(name string, ts time.Time) string {
 }
 
 func (pool *AgentPool) runSampler(name, address string, samples chan *ifmibpoller.IfStats) {
-	entry := &PollEntry{
-		Name:    name,
-		Address: address,
-	}
-
 	for i := 1; ; i++ {
+		var entry = &PollEntry{
+			Name:    name,
+			Address: address,
+		}
+
 		table, ok := <-samples
 		if !ok {
 			break
@@ -162,7 +166,13 @@ func (pool *AgentPool) runSampler(name, address string, samples chan *ifmibpolle
 
 		filename := pool.interpolatePath(name, table.Timestamp)
 
-		err := entry.Save(table, filename)
+		entry.Prepare(table)
+
+		go func() {
+			pool.samples <- entry
+		}()
+
+		err := entry.Save(filename)
 		if err != nil {
 			log.Printf("%s: error while polling agent, missed #%d, took %.3fs: %v", name, i, entry.Duration, err)
 			i--
@@ -173,16 +183,17 @@ func (pool *AgentPool) runSampler(name, address string, samples chan *ifmibpolle
 	}
 }
 
-func main() {
-	var err error
+var (
+	iniFlag  = flag.String("ini", "", "path to configuration file")
+	httpFlag = flag.String("http", "127.0.0.1:8000", "`addr:port` to bind to")
+)
 
+func main() {
 	flag.Usage = func() {
 		fmt.Printf("Usage:\n")
 		fmt.Printf("   %s\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 	}
-
-	iniFlag := flag.String("ini", "", "path to configuration file")
 
 	flag.Parse()
 
@@ -191,38 +202,68 @@ func main() {
 		log.Fatalf("Fail to read file: %v", err)
 	}
 
+	var bus sse.Broadcaster
+
+	http.HandleFunc("/samples", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s: subscribing to samples", r.RemoteAddr)
+
+		var errc = make(chan error)
+
+		ew, err := sse.EventWriter(w)
+		if err != nil {
+			log.Printf("%s: event writer error: %s", r.RemoteAddr, err)
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+
+		bus.Add(ew, errc)
+		defer bus.Remove(ew)
+
+		select {
+		case err := <-errc:
+			log.Printf("%s: error writing samples: %s", r.RemoteAddr, err)
+
+		case <-r.Context().Done():
+			break
+		}
+	})
+
+	go func() {
+		log.Printf("Serving event stream at http://%s/samples", *httpFlag)
+
+		log.Fatal(http.ListenAndServe(*httpFlag, nil))
+	}()
+
 	pc := &PoolConfig{}
 	pc.FromIni(cfg)
 
 	pool := NewAgentPool()
 	pool.ApplyConfig(pc)
 
-	<-make(chan bool)
+	var nextId int
 
-	/*
-		agent.Stop()
-		agent.UnregisterSampleListener(samples)
-
-		for {
-			_, ok := <-samples
-			if !ok {
-				break
+	for {
+		select {
+		case sample := <-pool.samples:
+			var ev = sse.Event{
+				Id:    fmt.Sprintf("%d", nextId),
+				Event: "ifmib-sample",
+				Data:  sample,
 			}
+			nextId++
+
+			ev.WriteTo(&bus)
 		}
-	*/
+	}
 }
 
-func (entry *PollEntry) Save(table *ifmibpoller.IfStats, filename string) error {
-	var err error
-
+func (entry *PollEntry) Prepare(table *ifmibpoller.IfStats) {
 	entry.Table = table
 	entry.Timestamp = table.Timestamp.Format(time.RFC3339Nano)
 	entry.Duration = table.Duration.Seconds()
+}
 
-	if err != nil {
-		return err
-	}
-
+func (entry *PollEntry) Save(filename string) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
