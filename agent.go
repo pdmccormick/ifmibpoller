@@ -1,4 +1,4 @@
-package calcula
+package ifmibpoller
 
 import (
 	"log"
@@ -21,11 +21,11 @@ type AgentConfig struct {
 type Agent struct {
 	name string
 
-	mu        sync.RWMutex
-	running   bool
-	stopping  chan chan bool
-	configure chan *agentConfigReq
-	listeners map[chan<- *IfStats]bool
+	mu              sync.RWMutex
+	running         bool
+	stopping        chan chan bool
+	configure       chan *agentConfigReq
+	sampleListeners map[chan<- *IfStats]bool
 }
 
 type agentConfigReq struct {
@@ -33,7 +33,7 @@ type agentConfigReq struct {
 	resp   chan bool
 }
 
-func MakeAgent(name string) *Agent {
+func NewAgent(name string) *Agent {
 	return &Agent{
 		name:      name,
 		stopping:  make(chan chan bool),
@@ -90,26 +90,26 @@ func (a *Agent) Configure(config *AgentConfig) bool {
 	return <-req.resp
 }
 
-func (a *Agent) RegisterListener(ch chan<- *IfStats) {
+func (a *Agent) RegisterSampleListener(ch chan<- *IfStats) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.listeners == nil {
-		a.listeners = make(map[chan<- *IfStats]bool)
+	if a.sampleListeners == nil {
+		a.sampleListeners = make(map[chan<- *IfStats]bool)
 	}
 
-	a.listeners[ch] = true
+	a.sampleListeners[ch] = true
 }
 
-func (a *Agent) UnregisterListener(ch chan<- *IfStats) {
+func (a *Agent) UnregisterSampleListener(ch chan<- *IfStats) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.listeners == nil {
+	if a.sampleListeners == nil {
 		return
 	}
 
-	delete(a.listeners, ch)
+	delete(a.sampleListeners, ch)
 }
 
 func (a *Agent) loop() {
@@ -185,7 +185,7 @@ func (a *Agent) sample(snmp *gosnmp.GoSNMP) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	for ch := range a.listeners {
+	for ch := range a.sampleListeners {
 		ch := ch
 		go func() { ch <- sample }()
 	}

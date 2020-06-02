@@ -12,12 +12,12 @@ bin:
 	@mkdir -p bin/
 
 bin/%: cmd/%/*.go *.go
-	@echo "    BUILD $@"
+	@echo "    BUILD    $@"
 	@go build -o $@ ./$(shell dirname $<)
 
 test:
 	@echo "    TEST"
-	@go test calcula/...
+	@go test ./...
 
 clean:
 	@echo "    CLEAN"

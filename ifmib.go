@@ -1,4 +1,4 @@
-package calcula
+package ifmibpoller
 
 import (
 	"errors"
@@ -14,6 +14,9 @@ var (
 )
 
 const (
+	SNMPv2_TC_TruthValue_True  = 1
+	SNMPv2_TC_TruthValue_False = 2
+
 	OID_ifMIB_ifXEntry = ".1.3.6.1.2.1.31.1.1.1"
 
 	// State
@@ -37,20 +40,100 @@ type IfStats struct {
 	Timestamp time.Time     `json:"-"`
 	Duration  time.Duration `json:"-"`
 
-	Index   []uint64 `json:"index"`
-	Name    []string `json:"name"`
-	Alias   []string `json:"alias"`
-	Present []bool   `json:"present"`
+	State IfMibState
+	Count IfMibCount
+}
 
-	Linkspeed        []uint64 `json:"linkspeed"`
-	InOctets         []uint64 `json:"in_bytes"`
-	InUcastPkts      []uint64 `json:"in_upkts"`
-	InMulticastPkts  []uint64 `json:"in_mpkts"`
-	InBroadcastPkts  []uint64 `json:"in_bpkts"`
-	OutOctets        []uint64 `json:"out_bytes"`
-	OutUcastPkts     []uint64 `json:"out_upkts"`
-	OutMulticastPkts []uint64 `json:"out_mpkts"`
-	OutBroadcastPkts []uint64 `json:"out_bpkts"`
+type IfMibState struct {
+	Index     []uint64
+	Name      []string
+	Alias     []string
+	Present   []bool
+	Linkspeed []uint64
+}
+
+type IfMibCount struct {
+	InOctets         []uint64
+	InUcastPkts      []uint64
+	InMulticastPkts  []uint64
+	InBroadcastPkts  []uint64
+	OutOctets        []uint64
+	OutUcastPkts     []uint64
+	OutMulticastPkts []uint64
+	OutBroadcastPkts []uint64
+}
+
+func (x *IfMibState) Equal(y *IfMibState) bool {
+	if len(x.Index) != len(y.Index) ||
+		len(x.Name) != len(y.Name) ||
+		len(x.Alias) != len(y.Alias) ||
+		len(x.Present) != len(y.Present) ||
+		len(x.Linkspeed) != len(y.Linkspeed) {
+		return false
+	}
+
+	for i, xi := range x.Index {
+		if xi != y.Index[i] {
+			return false
+		}
+	}
+
+	for i, xi := range x.Name {
+		if xi != y.Name[i] {
+			return false
+		}
+	}
+
+	for i, xi := range x.Alias {
+		if xi != y.Alias[i] {
+			return false
+		}
+	}
+
+	for i, xi := range x.Present {
+		if xi != y.Present[i] {
+			return false
+		}
+	}
+
+	for i, xi := range x.Linkspeed {
+		if xi != y.Linkspeed[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (x *IfMibCount) Equal(y *IfMibCount) bool {
+	ptrs := []*[]uint64{
+		&x.InOctets, &y.InOctets,
+		&x.InUcastPkts, &y.InUcastPkts,
+		&x.InMulticastPkts, &y.InMulticastPkts,
+		&x.InBroadcastPkts, &y.InBroadcastPkts,
+		&x.OutOctets, &y.OutOctets,
+		&x.OutUcastPkts, &y.OutUcastPkts,
+		&x.OutMulticastPkts, &y.OutMulticastPkts,
+		&x.OutBroadcastPkts, &y.OutBroadcastPkts,
+	}
+
+	for i := 0; i < len(ptrs); i += 2 {
+		x := *ptrs[i]
+		y := *ptrs[i+1]
+
+		if len(x) != len(y) {
+			return false
+		}
+
+		for j, xj := range x {
+			if xj != y[j] {
+				return false
+			}
+		}
+
+	}
+
+	return true
 }
 
 func (st *IfStats) Walk(snmp *gosnmp.GoSNMP) error {
@@ -63,57 +146,57 @@ func (st *IfStats) Walk(snmp *gosnmp.GoSNMP) error {
 		return err
 	}
 
-	st.Linkspeed, err = st.walkUint64(snmp, OID_ifXEntry_ifHighSpeed)
+	st.State.Linkspeed, err = st.walkUint64(snmp, OID_ifXEntry_ifHighSpeed)
 	if err != nil {
 		return err
 	}
 
-	st.Present, err = st.walkBool(snmp, OID_ifXEntry_ifConnectorPresent)
+	st.State.Present, err = st.walkBool(snmp, OID_ifXEntry_ifConnectorPresent)
 	if err != nil {
 		return err
 	}
 
-	st.Alias, err = st.walkString(snmp, OID_ifXEntry_ifAlias)
+	st.State.Alias, err = st.walkString(snmp, OID_ifXEntry_ifAlias)
 	if err != nil {
 		return err
 	}
 
-	st.InOctets, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInOctets)
+	st.Count.InOctets, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInOctets)
 	if err != nil {
 		return err
 	}
 
-	st.InUcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInUcastPkts)
+	st.Count.InUcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInUcastPkts)
 	if err != nil {
 		return err
 	}
 
-	st.InMulticastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInMulticastPkts)
+	st.Count.InMulticastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInMulticastPkts)
 	if err != nil {
 		return err
 	}
 
-	st.InBroadcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInBroadcastPkts)
+	st.Count.InBroadcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCInBroadcastPkts)
 	if err != nil {
 		return err
 	}
 
-	st.OutOctets, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutOctets)
+	st.Count.OutOctets, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutOctets)
 	if err != nil {
 		return err
 	}
 
-	st.OutUcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutUcastPkts)
+	st.Count.OutUcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutUcastPkts)
 	if err != nil {
 		return err
 	}
 
-	st.OutMulticastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutMulticastPkts)
+	st.Count.OutMulticastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutMulticastPkts)
 	if err != nil {
 		return err
 	}
 
-	st.OutBroadcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutBroadcastPkts)
+	st.Count.OutBroadcastPkts, err = st.walkUint64(snmp, OID_ifXEntry_ifHCOutBroadcastPkts)
 	if err != nil {
 		return err
 	}
@@ -130,8 +213,8 @@ func (st *IfStats) walkName(snmp *gosnmp.GoSNMP) error {
 	}
 
 	n := len(results)
-	st.Index = make([]uint64, n)
-	st.Name = make([]string, n)
+	st.State.Index = make([]uint64, n)
+	st.State.Name = make([]string, n)
 
 	for i, pdu := range results {
 		if pdu.Type != gosnmp.OctetString {
@@ -147,8 +230,8 @@ func (st *IfStats) walkName(snmp *gosnmp.GoSNMP) error {
 
 		b := pdu.Value.([]byte)
 
-		st.Index[i] = idx
-		st.Name[i] = string(b)
+		st.State.Index[i] = idx
+		st.State.Name[i] = string(b)
 	}
 
 	return nil
@@ -174,7 +257,7 @@ func (st *IfStats) walkString(snmp *gosnmp.GoSNMP, name string) ([]string, error
 			return nil, err
 		}
 
-		if idx != st.Index[i] {
+		if idx != st.State.Index[i] {
 			return nil, errorsIndexDrift
 		}
 
@@ -201,17 +284,17 @@ func (st *IfStats) walkBool(snmp *gosnmp.GoSNMP, name string) ([]bool, error) {
 			return nil, err
 		}
 
-		if idx != st.Index[i] {
+		if idx != st.State.Index[i] {
 			return nil, errorsIndexDrift
 		}
 
-		val := gosnmp.ToBigInt(pdu.Value).Uint64()
-		b := false
+		var b bool
 
-		// FIXME clarify the enum types
-		if val == 1 {
+		switch gosnmp.ToBigInt(pdu.Value).Uint64() {
+		case SNMPv2_TC_TruthValue_True:
 			b = true
-		} else if val == 2 {
+
+		case SNMPv2_TC_TruthValue_False:
 			b = false
 		}
 
@@ -237,7 +320,7 @@ func (st *IfStats) walkUint64(snmp *gosnmp.GoSNMP, name string) ([]uint64, error
 			return nil, err
 		}
 
-		if idx != st.Index[i] {
+		if idx != st.State.Index[i] {
 			return nil, errorsIndexDrift
 		}
 

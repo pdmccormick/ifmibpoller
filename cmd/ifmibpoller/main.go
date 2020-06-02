@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"calcula"
+	"github.com/pdmccormick/ifmibpoller"
 
 	"gopkg.in/ini.v1"
 )
@@ -23,20 +23,20 @@ const (
 )
 
 type PollEntry struct {
-	Name      string           `json:"name"`
-	Address   string           `json:"address"`
-	Timestamp string           `json:"timestamp"`
-	Duration  float64          `json:"duration"`
-	Table     *calcula.IfStats `json:"table"`
+	Name      string               `json:"name"`
+	Address   string               `json:"address"`
+	Timestamp string               `json:"timestamp"`
+	Duration  float64              `json:"duration"`
+	Table     *ifmibpoller.IfStats `json:"table"`
 }
 
 type PoolConfig struct {
 	pathfmt string
-	configs map[string]*calcula.AgentConfig
+	configs map[string]*ifmibpoller.AgentConfig
 }
 
 func (pc *PoolConfig) FromIni(cfg *ini.File) bool {
-	pc.configs = make(map[string]*calcula.AgentConfig)
+	pc.configs = make(map[string]*ifmibpoller.AgentConfig)
 
 	section, err := cfg.GetSection("agents")
 	if err != nil {
@@ -72,7 +72,7 @@ func (pc *PoolConfig) FromIni(cfg *ini.File) bool {
 
 		name := nameKey.MustString("")
 
-		config := &calcula.AgentConfig{
+		config := &ifmibpoller.AgentConfig{
 			Community: defaultCommunity,
 			Refresh:   defaultRefresh,
 		}
@@ -100,12 +100,12 @@ func (pc *PoolConfig) FromIni(cfg *ini.File) bool {
 
 type AgentPool struct {
 	pathfmt string
-	agents  map[string]*calcula.Agent
+	agents  map[string]*ifmibpoller.Agent
 }
 
 func NewAgentPool() *AgentPool {
 	pool := &AgentPool{
-		agents: make(map[string]*calcula.Agent),
+		agents: make(map[string]*ifmibpoller.Agent),
 	}
 
 	return pool
@@ -120,12 +120,12 @@ func (pool *AgentPool) ApplyConfig(cfg *PoolConfig) {
 	for name, config := range cfg.configs {
 		agent, found := pool.agents[name]
 		if !found {
-			agent = calcula.MakeAgent(name)
+			agent = ifmibpoller.NewAgent(name)
 			agent.Start()
 			pool.agents[name] = agent
 
-			samples := make(chan *calcula.IfStats)
-			agent.RegisterListener(samples)
+			samples := make(chan *ifmibpoller.IfStats)
+			agent.RegisterSampleListener(samples)
 
 			go pool.runSampler(name, config.Address, samples)
 
@@ -148,7 +148,7 @@ func (pool *AgentPool) interpolatePath(name string, ts time.Time) string {
 	return path
 }
 
-func (pool *AgentPool) runSampler(name, address string, samples chan *calcula.IfStats) {
+func (pool *AgentPool) runSampler(name, address string, samples chan *ifmibpoller.IfStats) {
 	entry := &PollEntry{
 		Name:    name,
 		Address: address,
@@ -201,7 +201,7 @@ func main() {
 
 	/*
 		agent.Stop()
-		agent.UnregisterListener(samples)
+		agent.UnregisterSampleListener(samples)
 
 		for {
 			_, ok := <-samples
@@ -212,7 +212,7 @@ func main() {
 	*/
 }
 
-func (entry *PollEntry) Save(table *calcula.IfStats, filename string) error {
+func (entry *PollEntry) Save(table *ifmibpoller.IfStats, filename string) error {
 	var err error
 
 	entry.Table = table
